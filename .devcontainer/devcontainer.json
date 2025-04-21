@@ -1,0 +1,10 @@
+{
+	"name": "JAX Container",
+	"dockerFile": "Dockerfile",
+	"settings": {},
+	"workspaceMount": "source=${localWorkspaceFolder},target=/home/user/jax,type=bind",
+	"workspaceFolder": "/home/user/jax",
+	"forwardPorts": [9002,9999,8890],
+	"extensions": ["ms-python.python", "ms-toolsai.jupyter"],
+	"runArgs": ["--gpus=all","--init","--network=host","--shm-size=5gb"]
+}
