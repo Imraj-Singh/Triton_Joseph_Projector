@@ -35,8 +35,8 @@ MLIR is a modern compiler infrastructure project (originating from the LLVM fami
 
 **How MLIR helps Triton:**
 
-1.  **Unified Infrastructure:** MLIR provides a common framework with multiple levels of abstraction ("dialects") to represent code. Triton uses MLIR dialects (like `triton_gpu`, `gpu`, `linalg`, `scf`) to represent the kernel's computation and parallelism.
-2.  **Optimization:** Common optimization passes can be developed within the MLIR framework and applied before generating final code for the hardware.
-3.  **Hardware Targeting:** MLIR handles the complex process of "lowering" the high-level representation through various intermediate steps down to something like **LLVM IR**. LLVM IR can then be compiled into the final machine code for specific backends (e.g., **PTX** for Nvidia GPUs via the LLVM NVPTX backend, or potentially targeting AMD GPUs via different pathways like SPIR-V or the LLVM AMDGPU backend).
+1.  **Unified Infrastructure:** MLIR provides a common framework with multiple levels of abstraction ("dialects") to represent code. Triton uses MLIR dialects to represent the kernel's computation and parallelism.
+2.  **Optimisation:** Common optimization passes can be developed within the MLIR framework and applied before generating final code for the hardware.
+3.  **Hardware Targeting:** MLIR handles the complex process of "lowering" the high-level representation through various intermediate steps down to something like **LLVM IR**. LLVM IR can then be compiled into the final machine code for specific backends.
 
-Essentially, Triton provides the productive Python front-end, while MLIR provides the powerful compiler backbone that enables optimization and retargeting to different hardware, facilitating Triton's goal of democratizing high-performance GPU programming. This project serves as a practical exploration of this toolchain for a common medical imaging task.
+Essentially, Triton provides the productive Python front-end, while MLIR provides the powerful compiler backbone that enables optimisation and retargeting to different hardware, facilitating Triton's goal of democratising high-performance GPU programming. This project serves as a practical exploration of this toolchain for an intensive tomographic image reconstruction operation.
