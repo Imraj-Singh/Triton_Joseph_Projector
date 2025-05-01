@@ -1,10 +1,11 @@
 {
-	"name": "JAX Container",
+	"name": "Triton Joseph Container",
 	"dockerFile": "Dockerfile",
 	"settings": {},
-	"workspaceMount": "source=${localWorkspaceFolder},target=/home/user/jax,type=bind",
-	"workspaceFolder": "/home/user/jax",
+	"workspaceMount": "source=${localWorkspaceFolder},target=/home/user/triton,type=bind",
+	"workspaceFolder": "/home/user/triton",
 	"forwardPorts": [9002,9999,8890],
 	"extensions": ["ms-python.python", "ms-toolsai.jupyter"],
-	"runArgs": ["--gpus=all","--init","--network=host","--shm-size=5gb"]
+	"runArgs": ["--gpus=all","--init","--network=host","--shm-size=5gb"],
+	"postCreateCommand": "conda install -c conda-forge parallelproj cupy notebook ipywidgets -y"
 }
