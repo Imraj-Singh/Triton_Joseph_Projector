@@ -12,8 +12,13 @@ import time
 from glob import glob
 all_test_data = glob("slices_*_lors_*.npy")
 if len(all_test_data) == 0:
-    print("No test data found. Please run the test_data.py script to generate it.")
+    print("No test data found. Please run the create_test_data.py script to generate it.")
     exit()
+
+import os
+if os.path.exists("TIMING_parallel_proj.txt"):
+    os.remove("TIMING_parallel_proj.txt")
+    print("Deleted existing TIMING_parallel_proj.txt file.")
 
 # extract slices and lors from the filename
 slices = []

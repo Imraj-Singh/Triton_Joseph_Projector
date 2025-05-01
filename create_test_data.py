@@ -33,7 +33,7 @@ for num_slices in list_slices:
         scanner = parallelproj.RegularPolygonPETScannerGeometry(
             xp,
             dev,
-            radius=210.0,
+            radius=210.0, # NOT REALISTIC AT ALL BUT JUST FOR TESTING
             num_sides=12,
             num_lor_endpoints_per_side=num_lor_endpoints_per_side,
             lor_spacing=108/num_lor_endpoints_per_side,
@@ -51,12 +51,7 @@ for num_slices in list_slices:
         proj = parallelproj.RegularPolygonPETProjector(
             lor_desc, img_shape=(image_xy, num_slices, image_xy), voxel_size=voxels_sizes,
         )
-        """ plt.close("all")
-        fig = plt.figure(figsize=(8, 8))
-        ax1 = fig.add_subplot(111, projection="3d")
-        proj.show_geometry(ax1)
-        fig.tight_layout()
-        fig.show() """
+        
         xstart, xend = proj._lor_descriptor.get_lor_coordinates(views=proj._views)
         print(f" Number of LORs is {xstart.shape[0]*xstart.shape[1]*xstart.shape[2]}")
         print(f" Number of Voxels is {image_xy*image_xy*num_slices}")
