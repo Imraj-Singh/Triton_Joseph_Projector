@@ -75,7 +75,6 @@ for test_data in all_test_data:
     number_of_voxels = x.shape[0]*x.shape[1]*x.shape[2]
 
     # save the timings to a file
-    # ch
     with open("TIMING_triton_joseph_proj.txt", "a") as f:
         f.write(f"{lors[-1]} {slices[-1]} {number_of_lors} {number_of_voxels} {forward_timing} {backward_timing} {mlem_timing}\n")
         print(f"Saved timings for slices: {slices[-1]} and lors: {lors[-1]} to timings.txt")

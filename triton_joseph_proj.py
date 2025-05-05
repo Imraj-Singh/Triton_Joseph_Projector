@@ -6,9 +6,8 @@ import math
 import time
 import os
 
-# Check CUDA availability
 if not torch.cuda.is_available():
-    DEVICE = torch.device("cpu")
+    raise RuntimeError("CUDA is not available. Please check your CUDA installation.")
 else:
     DEVICE = torch.device("cuda")
 print(f"Using device: {DEVICE}")
@@ -17,8 +16,16 @@ print(f"Using device: {DEVICE}")
 def ray_cube_intersection_device(orig_x, orig_y, orig_z, rdir_x, rdir_y, rdir_z, bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z):
     """ Calculates ray-AABB intersection returning mask, t_entry, t_exit """
     dtype = orig_x.dtype
-    small_epsilon = 1e-9
-    smaller_epsilon = 1e-12
+    
+    if dtype == tl.float16:
+        small_epsilon = 1e-4
+        smaller_epsilon = 1e-6 # Epsilon for checking t > 0
+    elif dtype == tl.float32:
+        small_epsilon = 1e-9
+        smaller_epsilon = 1e-12
+    else: # float64
+        small_epsilon = 1e-16
+        smaller_epsilon = 1e-20
 
     signed_epsilon_x = tl.where(rdir_x >= 0, small_epsilon, -small_epsilon)
     invdir_x = 1.0 / tl.where(tl.abs(rdir_x) < small_epsilon, signed_epsilon_x, rdir_x)
@@ -67,6 +74,7 @@ def joseph3d_fwd_kernel_vec(
     BLOCK_SIZE_M: tl.constexpr
     ):
     """ Block-vectorized Triton kernel for forward projection. """
+   
     pid = tl.program_id(axis=0)
 
     lor_idx_base = pid * BLOCK_SIZE_M
@@ -90,13 +98,27 @@ def joseph3d_fwd_kernel_vec(
     vs_y = tl.load(voxsize_ptr + 1)
     vs_z = tl.load(voxsize_ptr + 2)
     dtype = xs_x.dtype
+
+    accum_dtype = dtype
+    if dtype == tl.float16:
+        accum_dtype = tl.float32
+
+    if dtype == tl.float16:
+        safe_min_lsq = 1e-6
+        safe_min_divisor = 1e-4
+    elif dtype == tl.float32:
+        safe_min_lsq = 1e-12
+        safe_min_divisor = 1e-9
+    elif dtype == tl.float64:
+        safe_min_lsq = 1e-20
+        safe_min_divisor = 1e-16
     
     d_x = xe_x - xs_x
     d_y = xe_y - xs_y
     d_z = xe_z - xs_z
-    d_sq_x = d_x * d_x
-    d_sq_y = d_y * d_y
-    d_sq_z = d_z * d_z
+    d_sq_x = d_x.to(accum_dtype) * d_x.to(accum_dtype)
+    d_sq_y = d_y.to(accum_dtype) * d_y.to(accum_dtype)
+    d_sq_z = d_z.to(accum_dtype) * d_z.to(accum_dtype)
     lsq = d_sq_x + d_sq_y + d_sq_z
     bmin_x = -1.0 * vs_x + orig_x
     bmin_y = -1.0 * vs_y + orig_y
@@ -106,21 +128,16 @@ def joseph3d_fwd_kernel_vec(
     bmax_z = img_nz * vs_z + orig_z
     intersec, t1, t2 = ray_cube_intersection_device(xs_x, xs_y, xs_z, d_x, d_y, d_z, bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z)
 
-    accum_dtype = dtype
-    if dtype == tl.float16:
-        accum_dtype = tl.float32
-    elif dtype == tl.float32:
-        accum_dtype = tl.float64
 
     accumulated_proj = tl.zeros((BLOCK_SIZE_M,), dtype=accum_dtype)
     active_lor_mask_init = lor_mask & intersec
 
-    safe_lsq = tl.maximum(lsq, 1e-12)
-    len_lor = tl.sqrt(safe_lsq)
+    safe_lsq = tl.maximum(lsq, safe_min_lsq.to(accum_dtype))
+    len_lor = tl.sqrt(safe_lsq).to(dtype)
 
-    safe_d_sq_x = tl.where(lsq < 1e-12, 1.0, d_sq_x)
-    safe_d_sq_y = tl.where(lsq < 1e-12, 0.0, d_sq_y)
-    safe_d_sq_z = tl.where(lsq < 1e-12, 0.0, d_sq_z)
+    safe_d_sq_x = tl.where(lsq < safe_min_lsq, 1.0, d_sq_x).to(dtype)
+    safe_d_sq_y = tl.where(lsq < safe_min_lsq, 0.0, d_sq_y).to(dtype)
+    safe_d_sq_z = tl.where(lsq < safe_min_lsq, 0.0, d_sq_z).to(dtype)
 
     is_x_dom = (safe_d_sq_x >= safe_d_sq_y) & (safe_d_sq_x >= safe_d_sq_z)
     is_y_dom = (safe_d_sq_y > safe_d_sq_x) & (safe_d_sq_y >= safe_d_sq_z)
@@ -142,7 +159,7 @@ def joseph3d_fwd_kernel_vec(
     p1_axis = tl.where(is_x_dom, p1_intersect_x, tl.where(is_y_dom, p1_intersect_y, p1_intersect_z))
     p2_axis = tl.where(is_x_dom, p2_intersect_x, tl.where(is_y_dom, p2_intersect_y, p2_intersect_z))
 
-    safe_abs_d_axis = tl.maximum(tl.abs(d_axis), 1e-9)
+    safe_abs_d_axis = tl.maximum(tl.abs(d_axis), safe_min_divisor)
     corfac = vs_axis * len_lor / safe_abs_d_axis
 
     istart_f = (p1_axis - orig_axis) / vs_axis
@@ -165,8 +182,8 @@ def joseph3d_fwd_kernel_vec(
         if is_any_active:
             plane_coord = orig_axis + (i_dom.to(dtype)) * vs_axis
             
-            signed_epsilon = tl.where(d_axis >= 0, 1e-9, -1e-9)
-            safe_d_ax = tl.where(tl.abs(d_axis) < 1e-9, signed_epsilon + 1e-12, d_axis)
+            signed_epsilon = tl.where(d_axis >= 0, safe_min_divisor, -safe_min_divisor)
+            safe_d_ax = tl.where(tl.abs(d_axis) < safe_min_divisor, signed_epsilon +safe_min_lsq, d_axis)
             t_plane = (plane_coord - xs_axis) / safe_d_ax
             x_pr_x = t_plane * d_x + xs_x
             x_pr_y = t_plane * d_y + xs_y
@@ -216,7 +233,7 @@ def joseph3d_fwd_kernel_vec(
             accumulated_proj += tl.where(active_in_iter_mask, voxel_sum * corfac, 0.0)
 
     proj_offset = lor_indices * stride_proj_n
-    tl.store(proj_out_ptr + proj_offset, accumulated_proj.to(dtype), mask=lor_mask)
+    tl.store(proj_out_ptr + proj_offset, accumulated_proj, mask=lor_mask)
 
 @triton.autotune(configs=vec_configs, key=vec_key)
 @triton.jit
@@ -256,12 +273,26 @@ def joseph3d_bwd_kernel_vec(
     vs_z = tl.load(voxsize_ptr + 2)
     dtype = xs_x.dtype
 
+    accum_dtype = dtype
+    if dtype == tl.float16:
+        accum_dtype = tl.float32
+
+    if dtype == tl.float16:
+        safe_min_lsq = 1e-6
+        safe_min_divisor = 1e-4
+    elif dtype == tl.float32:
+        safe_min_lsq = 1e-12
+        safe_min_divisor = 1e-9
+    elif dtype == tl.float64:
+        safe_min_lsq = 1e-20
+        safe_min_divisor = 1e-16
+
     d_x = xe_x - xs_x
     d_y = xe_y - xs_y
     d_z = xe_z - xs_z
-    d_sq_x = d_x * d_x
-    d_sq_y = d_y * d_y
-    d_sq_z = d_z * d_z
+    d_sq_x = d_x.to(accum_dtype) * d_x.to(accum_dtype)
+    d_sq_y = d_y.to(accum_dtype) * d_y.to(accum_dtype)
+    d_sq_z = d_z.to(accum_dtype) * d_z.to(accum_dtype)
     lsq = d_sq_x + d_sq_y + d_sq_z
     bmin_x = -1.0 * vs_x + orig_x
     bmin_y = -1.0 * vs_y + orig_y
@@ -270,21 +301,25 @@ def joseph3d_bwd_kernel_vec(
     bmax_y = img_ny * vs_y + orig_y
     bmax_z = img_nz * vs_z + orig_z
     intersec, t1, t2 = ray_cube_intersection_device(xs_x, xs_y, xs_z, d_x, d_y, d_z, bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z)
-
-    accum_dtype = dtype
-    if dtype == tl.float16:
-        accum_dtype = tl.float32
-
-    accumulated_proj = tl.zeros((BLOCK_SIZE_M,), dtype=accum_dtype)
     
+    if dtype == tl.float16:
+        safe_min_lsq = 1e-6
+        safe_min_divisor = 1e-4
+    elif dtype == tl.float32:
+        safe_min_lsq = 1e-12
+        safe_min_divisor = 1e-9
+    elif dtype == tl.float64:
+        safe_min_lsq = 1e-20
+        safe_min_divisor = 1e-16
+
     active_lor_mask_init = lor_mask & intersec
 
-    safe_lsq = tl.maximum(lsq, 1e-12)
-    len_lor = tl.sqrt(safe_lsq)
+    safe_lsq = tl.maximum(lsq, safe_min_lsq.to(accum_dtype))
+    len_lor = tl.sqrt(safe_lsq).to(dtype)
 
-    safe_d_sq_x = tl.where(lsq < 1e-12, 1.0, d_sq_x)
-    safe_d_sq_y = tl.where(lsq < 1e-12, 0.0, d_sq_y)
-    safe_d_sq_z = tl.where(lsq < 1e-12, 0.0, d_sq_z)
+    safe_d_sq_x = tl.where(lsq < safe_min_lsq, 1.0, d_sq_x).to(dtype)
+    safe_d_sq_y = tl.where(lsq < safe_min_lsq, 0.0, d_sq_y).to(dtype)
+    safe_d_sq_z = tl.where(lsq < safe_min_lsq, 0.0, d_sq_z).to(dtype)
 
     is_x_dom = (safe_d_sq_x >= safe_d_sq_y) & (safe_d_sq_x >= safe_d_sq_z)
     is_y_dom = (safe_d_sq_y > safe_d_sq_x) & (safe_d_sq_y >= safe_d_sq_z)
@@ -306,7 +341,7 @@ def joseph3d_bwd_kernel_vec(
     p1_axis = tl.where(is_x_dom, p1_intersect_x, tl.where(is_y_dom, p1_intersect_y, p1_intersect_z))
     p2_axis = tl.where(is_x_dom, p2_intersect_x, tl.where(is_y_dom, p2_intersect_y, p2_intersect_z))
 
-    safe_abs_d_axis = tl.maximum(tl.abs(d_axis), 1e-9)
+    safe_abs_d_axis = tl.maximum(tl.abs(d_axis), safe_min_divisor)
     corfac = vs_axis * len_lor / safe_abs_d_axis
 
     istart_f = (p1_axis - orig_axis) / vs_axis
@@ -328,8 +363,8 @@ def joseph3d_bwd_kernel_vec(
     other_axis2_nx = tl.where(is_x_dom_vec, img_nz, tl.where(is_y_dom_vec, img_nz, img_ny)).to(tl.int32)
 
     
-    signed_epsilon = tl.where(d_axis >= 0, 1e-9, -1e-9)
-    safe_d_ax = tl.where(tl.abs(d_axis) < 1e-9, signed_epsilon, d_axis)
+    signed_epsilon = tl.where(d_axis >= 0, safe_min_divisor, -safe_min_divisor)
+    safe_d_ax = tl.where(tl.abs(d_axis) < safe_min_divisor, signed_epsilon, d_axis)
 
     max_img_dim = tl.maximum(img_nx, tl.maximum(img_ny, img_nz))
     
@@ -392,7 +427,10 @@ def joseph3d_fwd_vec(
 
     nlors = xstart.shape[0]
     img_nx, img_ny, img_nz = img_dim_tup
-    projection_data = torch.zeros(nlors, dtype=dtype, device=DEVICE)
+    if dtype == torch.float16:
+        projection_data = torch.zeros(nlors, dtype=torch.float32, device=DEVICE)
+    else:
+        projection_data = torch.zeros(nlors, dtype=dtype, device=DEVICE)
 
     def grid(meta):
         return (triton.cdiv(nlors, meta['BLOCK_SIZE_M']),)
@@ -418,11 +456,14 @@ def joseph3d_back_vec(
     ):
 
     dtype = proj.dtype; assert xstart.dtype == dtype and xend.dtype == dtype and img_origin.dtype == dtype and voxsize.dtype == dtype
-    #assert xstart.device == DEVICE and xend.device == DEVICE and proj.device == DEVICE and img_origin.device == DEVICE and voxsize.device == DEVICE
 
     nlors = xstart.shape[0]
     img_nx, img_ny, img_nz = img_dim_tup
-    img_out = torch.zeros(img_dim_tup, dtype=dtype, device=DEVICE).contiguous()
+    if dtype == torch.float16:
+        img_out = torch.zeros(img_dim_tup, dtype=torch.float32, device=DEVICE).contiguous()
+    else:
+        img_out = torch.zeros(img_dim_tup, dtype=dtype, device=DEVICE).contiguous()
+    
     assert img_out.is_contiguous()
 
     def grid(meta):
@@ -449,50 +490,7 @@ if __name__ == "__main__":
     import time
     import array_api_compat.torch as xp
 
-    dict_data = np.load("small_regular_polygon_geom.npy", allow_pickle=True).item()
-
-    # --- Float16 Test ---
-    print("\n--- Testing with float16 ---")
-    xstart_f16 = xp.asarray(dict_data['xstart']).cuda().half()
-    xend_f16 = xp.asarray(dict_data['xend']).cuda().half()
-    img_origin_f16 = xp.asarray(dict_data['img_origin']).cuda().half()
-    voxel_size_f16 = xp.asarray(dict_data['voxel_size']).cuda().half()
-    img_shape = dict_data['img_shape']
-    x_gt_f16 = xp.asarray(dict_data['x']).cuda().half()
-    meas_f16 = xp.asarray(dict_data['meas']).cuda().half()
-
-    fwd16 = lambda x: joseph3d_fwd_vec(xstart_f16.reshape(-1,3), xend_f16.reshape(-1,3), x, img_origin_f16, voxel_size_f16, img_shape).reshape(meas_f16.shape)
-    back16 = lambda y: joseph3d_back_vec(xstart_f16.reshape(-1,3), xend_f16.reshape(-1,3), y.ravel(), img_origin_f16, voxel_size_f16, img_shape)
-
-    print("Triton Forward (float16) - First call (expect compilation/tuning):")
-    start = time.time()
-    tmp_fwd_f16 = fwd16(x_gt_f16)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s")
-
-    print("Triton Forward (float16) - Second call (expect cache hit):")
-    start = time.time()
-    for i in range(100):
-        tmp_fwd_f16 = fwd16(x_gt_f16)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s")
-
-    print("Triton Backward (float16) - First call (expect compilation/tuning):")
-    start = time.time()
-    tmp_bwd_f16 = back16(meas_f16)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s")
-
-    print("Triton Backward (float16) - Second call (expect cache hit):")
-    start = time.time()
-    for i in range(100):
-        tmp_bwd_f16 = back16(meas_f16)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s")
+    dict_data = np.load("/home/user/triton/slices_4_lors_20.npy", allow_pickle=True).item()
 
     # --- Float32 Test ---
     print("\n--- Testing with float32 ---")
@@ -520,7 +518,7 @@ if __name__ == "__main__":
         tmp_fwd_f32 = fwd32(x_gt_f32)
     torch.cuda.synchronize(DEVICE)
     end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s")
+    print(f"Time: {(end_t - start)/100:.6f} s")
 
     print("Triton Backward (float32) - First call (expect compilation/tuning):")
     start = time.time()
@@ -535,47 +533,4 @@ if __name__ == "__main__":
         tmp_bwd_f32 = back32(meas_f32)
     torch.cuda.synchronize(DEVICE)
     end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s")
-
-    # --- Float64 Test ---
-    print("\n--- Testing with float64 ---")
-    xstart_f64 = xp.asarray(dict_data['xstart']).cuda().double()
-    xend_f64 = xp.asarray(dict_data['xend']).cuda().double()
-    img_origin_f64 = xp.asarray(dict_data['img_origin']).cuda().double()
-    voxel_size_f64 = xp.asarray(dict_data['voxel_size']).cuda().double()
-    # img_shape is the same
-    x_gt_f64 = xp.asarray(dict_data['x']).cuda().double()
-    meas_f64 = xp.asarray(dict_data['meas']).cuda().double()
-
-    fwd64 = lambda x: joseph3d_fwd_vec(xstart_f64.reshape(-1,3), xend_f64.reshape(-1,3), x, img_origin_f64, voxel_size_f64, img_shape).reshape(meas_f64.shape)
-    back64 = lambda y: joseph3d_back_vec(xstart_f64.reshape(-1,3), xend_f64.reshape(-1,3), y.ravel(), img_origin_f64, voxel_size_f64, img_shape)
-
-    print("Triton Forward (float64) - First call (expect compilation/tuning):")
-    start = time.time()
-    tmp_fwd_f64 = fwd64(x_gt_f64)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s") # Should be slow again
-
-    print("Triton Forward (float64) - Second call (expect cache hit):")
-    start = time.time()
-    for i in range(100):
-        tmp_fwd_f64 = fwd64(x_gt_f64)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s") # Should be fast
-
-    print("Triton Backward (float64) - First call (expect compilation/tuning):")
-    start = time.time()
-    tmp_bwd_f64 = back64(meas_f64)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s") # Should be slow again
-
-    print("Triton Backward (float64) - Second call (expect cache hit):")
-    start = time.time()
-    for i in range(100):
-        tmp_bwd_f64 = back64(meas_f64)
-    torch.cuda.synchronize(DEVICE)
-    end_t = time.time()
-    print(f"Time: {(end_t - start):.6f} s") # Should be fast
+    print(f"Time: {(end_t - start)/100:.6f} s")

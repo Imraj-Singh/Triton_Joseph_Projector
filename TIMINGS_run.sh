@@ -1,0 +1,2 @@
+python TIMING_triton_joseph_proj.py
+python TIMING_parallel_proj.py
