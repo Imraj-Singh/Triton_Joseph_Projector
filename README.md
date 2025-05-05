@@ -20,7 +20,7 @@ Triton [https://triton-lang.org/main/index.html](https://triton-lang.org/main/in
 
 Key aspects relevant to this project include:
 
-* **Python Integration:** Kernels are written using Python syntax. This leverages Python's ease of use and integrates seamlessly with libraries like PyTorch, allowing kernels to operate directly on `torch.Tensor` objects residing on the GPU. This avoids the explicit memory management (`cudaMalloc`, `cudaMemcpy`, etc.) often required in C++/CUDA, reducing complexity and potential bugs.
+* **Python Integration:** Kernels writing is embedded with Python syntax. This leverages Python's ease of use and integrates seamlessly with libraries like PyTorch, allowing kernels to operate directly on `torch.Tensor` objects residing on the GPU. This avoids the explicit memory management (`cudaMalloc`, `cudaMemcpy`, etc.) often required in C++/CUDA, reducing complexity and potential bugs.
 * **JIT Compilation:** Triton kernels are compiled **Just-In-Time (JIT)** when first called. Triton's compiler analyzes the Python code and generates highly optimized machine code (e.g., PTX for Nvidia) specifically for the target GPU architecture.
 * **Performance Focus:** While being a higher-level language, Triton is designed to generate code competitive with hand-written CUDA. It provides abstractions for managing GPU resources like shared memory and specifying tiling strategies, guiding the compiler to produce efficient parallel execution plans.
 * **Hardware Abstraction (via MLIR):** Triton achieves its cross-vendor capability by leveraging MLIR as a compiler backend (see below). The goal is to write one Triton kernel and have the compiler generate efficient code for different GPU architectures.
@@ -40,3 +40,29 @@ MLIR is a modern compiler infrastructure project (originating from the LLVM fami
 3.  **Hardware Targeting:** MLIR handles the complex process of "lowering" the high-level representation through various intermediate steps down to something like **LLVM IR**. LLVM IR can then be compiled into the final machine code for specific backends.
 
 Essentially, Triton provides the productive Python front-end, while MLIR provides the powerful compiler backbone that enables optimisation and retargeting to different hardware, facilitating Triton's goal of democratising high-performance GPU programming. This project serves as a practical exploration of this toolchain for an intensive tomographic image reconstruction operation.
+
+## Tests in this repo
+
+We looked at some small tests validation (comparing to ParallelProj after 1000 MLEM steps), timing tests at float32 precision for forward/backward and MLEM steps, and testing of different precisions with an adjointness test.
+
+### Validation
+
+![image info](/validation_10000_MLEM.png)
+
+
+### Timing
+
+![image info](/timing_percentage_difference.png)
+
+### Precision
+
+| Precision  | Normalised Adjointness Test  |  Timing (ms) |
+|---|---|---|
+|  float16 | 5.71e-6  | 15.4  |  
+| float32  |  9.10e-8 | 16.1  |   
+| float64  | 0.00  | 76.1  |
+
+
+# Development containers
+
+This repository uses .devcontainers to to containerise the full development environment, see here: [https://containers.dev/](https://containers.dev/). We install on-top of a pytorch image and the details can be found in `\.devcontainer`.
