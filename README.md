@@ -47,6 +47,12 @@ We looked at some small tests validation (comparing to ParallelProj after 1000 M
 
 ### Validation
 
+Comparison of forward and backward projecting the Shepp-Logan phantom compared with ParallelProj
+
+![image info](./validation.png)
+
+Reconstructions after 10,000 of MLEM. 
+
 ![image info](/validation_10000_MLEM.png)
 
 
