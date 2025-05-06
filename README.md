@@ -6,7 +6,7 @@ This project drew inspiration from the blog post series by Chris Lattner on demo
 
 ## Motivation
 
-The core goal was to implement a computationally expensive projection operator used in iterative tomographic reconstruction – specifically the **Joseph forward/back-projector** – using Triton. In tomography, projection operations map between the image volume (patient anatomy) and the detector data (sinogram). The Joseph projector is one algorithm for performing this mapping, calculating the intersection length of projection rays with image voxels. Due to the large number of rays and voxels, this operation is computationally intensive but also highly parallelisable as there are weak dependencies between data elements (e.g., calculating one ray's projection is largely independent of others), making it ideal for GPU acceleration. Traditionally, high-performance GPU kernels for such tasks are written in **CUDA** for Nvidia GPUs or potentially **HIP** for AMD GPUs. While mature and capable of extracting maximum performance, CUDA creates vendor lock-in, and maintaining separate CUDA/HIP codebases increases development effort.
+The core goal was to implement a computationally expensive projection operator used in iterative tomographic reconstruction – specifically the **Joseph forward/back-projector** – using Triton. In tomography, projection operations map between the image volume (patient anatomy) and the detector data (sinogram). The Joseph projector is one algorithm for performing this mapping. Due to the large number of rays and voxels, this operation is computationally intensive but also highly parallelisable as there are weak dependencies between data elements (e.g., calculating one ray's projection is largely independent of others), making it ideal for GPU acceleration. Traditionally, high-performance GPU kernels for such tasks are written in **CUDA** for Nvidia GPUs or potentially **HIP** for AMD (and Nvidia) GPUs. While mature and capable of extracting maximum performance, CUDA creates vendor lock-in, and maintaining separate codebases increases development effort.
 
 We aimed to explore **Triton** as an alternative that offers:
 1.  **Cross-Compatibility:** The ability to write a single kernel targeting both Nvidia and AMD GPUs.
@@ -39,11 +39,11 @@ MLIR is a modern compiler infrastructure project (originating from the LLVM fami
 2.  **Optimisation:** Common optimization passes can be developed within the MLIR framework and applied before generating final code for the hardware.
 3.  **Hardware Targeting:** MLIR handles the complex process of "lowering" the high-level representation through various intermediate steps down to something like **LLVM IR**. LLVM IR can then be compiled into the final machine code for specific backends.
 
-Essentially, Triton provides the productive Python front-end, while MLIR provides the powerful compiler backbone that enables optimisation and retargeting to different hardware, facilitating Triton's goal of democratising high-performance GPU programming. This project serves as a practical exploration of this toolchain for an intensive tomographic image reconstruction operation.
+Essentially, Triton provides the productive Python front-end, while MLIR provides the infrastructure for the compiler to use that enables optimisation and retargeting to different hardware, facilitating Triton's goal of democratising high-performance GPU programming. This project serves as a practical exploration of this toolchain for an intensive tomographic image reconstruction operation.
 
 ## Tests in this repo
 
-We looked at some small tests validation (comparing to ParallelProj after 1000 MLEM steps), timing tests at float32 precision for forward/backward and MLEM steps, and testing of different precisions with an adjointness test.
+We looked at some small tests: validation comparisons of forward/backward projections, and reconstructions after 10000 MLEM steps), timing tests at float32 precision for forward/backward and MLEM steps, and testing of different precisions with an adjointness test.
 
 ### Validation
 
@@ -62,7 +62,7 @@ Reconstructions after 10,000 of MLEM.
 
 ### Precision
 
-| Precision  | Normalised Adjointness Test  |  Timing (ms) |
+| Precision  | Relative Adjointness Test  |  Timing (ms) |
 |---|---|---|
 |  float16 | 5.71e-6  | 15.4  |  
 | float32  |  9.10e-8 | 16.1  |   
