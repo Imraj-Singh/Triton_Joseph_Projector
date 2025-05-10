@@ -1,0 +1,1 @@
+conda install -c conda-forge parallelproj cupy notebook ipywidgets -y
